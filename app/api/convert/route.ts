@@ -113,9 +113,9 @@ export async function POST(req: NextRequest) {
         zip.file(`slide_${String(i + 1).padStart(2, '0')}.png`, pngBuf)
       }
 
-      const zipBuf = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' })
+      const zipBuf = await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' })
 
-      return new NextResponse(zipBuf, {
+      return new NextResponse(zipBuf as any, {
         headers: {
           'Content-Type': 'application/zip',
           'Content-Disposition': `attachment; filename="${baseName}_slides.zip"`,
@@ -125,8 +125,9 @@ export async function POST(req: NextRequest) {
       // ── Single PNG ──
       const slideHtml = buildSlideHtml(originalHtml, null)
       const pngBuf    = await screenshotWithBrowserless(slideHtml)
+      const pngUint8  = new Uint8Array(pngBuf)
 
-      return new NextResponse(pngBuf, {
+      return new NextResponse(pngUint8 as any, {
         headers: {
           'Content-Type': 'image/png',
           'Content-Disposition': `attachment; filename="${baseName}.png"`,
