@@ -75,7 +75,6 @@ async function screenshotWithBrowserless(html: string): Promise<Buffer> {
         omitBackground: false,
       },
       viewport: { width: 1080, height: 1080, deviceScaleFactor: 1 },
-      waitFor: 1200, // ms — wait for fonts/transitions
       gotoOptions: { waitUntil: 'networkidle2', timeout: 20000 },
     }),
   })
