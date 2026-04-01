@@ -25,7 +25,7 @@ function buildSlideHtml(originalHtml: string, slideIndex: number | null): string
         Object.assign(document.body.style, {
           margin: '0', padding: '0', gap: '0',
           display: 'flex', flexDirection: 'column',
-          alignItems: 'flex-start', justifyContent: 'flex-start',
+          alignItems: 'center', justifyContent: 'center',
           background: '#06060A', overflow: 'hidden',
           width: '1080px', height: '1080px'
         });
