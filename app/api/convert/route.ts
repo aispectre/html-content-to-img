@@ -2,9 +2,10 @@ import { NextRequest, NextResponse } from 'next/server'
 import JSZip from 'jszip'
 
 export const runtime = 'nodejs'
-export const maxDuration = 300 // 5 min for large carousels
+export const maxDuration = 300
 
-// ── Helpers ──────────────────────────────────────────────
+const SIZE = 1080 // Always square 1080×1080
+
 function isCarousel(html: string) {
   return html.includes('class="track"') && (html.match(/class="slide"/g) || []).length > 1
 }
@@ -12,89 +13,143 @@ function countSlides(html: string) {
   return (html.match(/class="slide"/g) || []).length
 }
 
-// ── Build HTML that renders ONE slide at 1080×1080 ───────
-function buildSlideHtml(originalHtml: string, slideIndex: number | null): string {
-  const script = `
-  <script>
-    (function() {
-      function run() {
-        // Hide nav
-        document.querySelectorAll('.nav-row, .label, footer').forEach(el => el.style.display = 'none');
+function prepareHtml(originalHtml: string, slideIndex: number | null): string {
+  let html = originalHtml
+    .replace(/<meta\s+name="viewport"[^>]*>/gi, '')
+    .replace(/<script\b[\s\S]*?<\/script>/gi, '')
 
-        // Fix body
-        Object.assign(document.body.style, {
-          margin: '0', padding: '0', gap: '0',
-          display: 'flex', flexDirection: 'column',
-          alignItems: 'center', justifyContent: 'center',
-          background: '#06060A', overflow: 'hidden',
-          width: '1080px', height: '1080px'
-        });
+  const injection = `
+<meta name="viewport" content="width=${SIZE}, initial-scale=1.0, user-scalable=no">
+<style>
+  *, *::before, *::after {
+    -webkit-font-smoothing: antialiased !important;
+    -moz-osx-font-smoothing: grayscale  !important;
+    text-rendering: optimizeLegibility  !important;
+  }
+  html {
+    width:  ${SIZE}px !important;
+    height: ${SIZE}px !important;
+    overflow: hidden !important;
+  }
+  body {
+    width:      ${SIZE}px !important;
+    height:     ${SIZE}px !important;
+    min-height: ${SIZE}px !important;
+    max-height: ${SIZE}px !important;
+    overflow:   hidden !important;
+    margin:     0 !important;
+    padding:    0 !important;
+    gap:        0 !important;
+    display:    flex !important;
+    align-items:     center !important;
+    justify-content: center !important;
+    background: #050508 !important;
+  }
+  .label, .hint, .nav-row, footer, .nav-btn, .dots, .slide-num {
+    display: none !important;
+  }
+  .carousel-outer, #carouselOuter, .post-outer, #postOuter {
+    width:         ${SIZE}px !important;
+    height:        ${SIZE}px !important;
+    min-width:     ${SIZE}px !important;
+    min-height:    ${SIZE}px !important;
+    max-width:     ${SIZE}px !important;
+    max-height:    ${SIZE}px !important;
+    overflow:      hidden    !important;
+    border-radius: 0         !important;
+    box-shadow:    none      !important;
+    flex-shrink:   0         !important;
+    transform:     none      !important;
+    position:      relative  !important;
+  }
+  .carousel-canvas, #carouselCanvas, .post-canvas, #postCanvas {
+    width:     ${SIZE}px !important;
+    height:    ${SIZE}px !important;
+    transform: none      !important;
+    position:  relative  !important;
+    top:  0 !important;
+    left: 0 !important;
+    overflow: hidden !important;
+  }
+  .track, #track {
+    transition: none !important;
+  }
+</style>
+<script>
+  (function () {
+    var _ael = window.addEventListener.bind(window);
+    window.addEventListener = function (type, handler, opts) {
+      if (type === 'resize') return;
+      _ael(type, handler, opts);
+    };
+    window.scale       = function () {};
+    window.scaleCanvas = function () {};
 
-        // Fix carousel containers
-        var outer  = document.getElementById('carouselOuter')  || document.querySelector('.carousel-outer');
-        var canvas = document.getElementById('carouselCanvas') || document.querySelector('.carousel-canvas');
-        if (outer)  outer.style.cssText  = 'width:1080px;height:1080px;overflow:hidden;border-radius:0;box-shadow:none;position:relative;flex-shrink:0;';
-        if (canvas) canvas.style.cssText = 'width:1080px;height:1080px;position:relative;transform:none;';
-
-        // Go to slide instantly (no animation)
-        ${slideIndex !== null ? `
-        var track = document.getElementById('track') || document.querySelector('.track');
-        if (track) {
-          track.style.transition = 'none';
-          track.style.transform  = 'translateX(-' + (${slideIndex} * 1080) + 'px)';
+    document.addEventListener('DOMContentLoaded', function () {
+      var track = document.getElementById('track') || document.querySelector('.track');
+      if (track) {
+        track.style.transition = 'none';
+        track.style.transform  = 'translateX(-${slideIndex === null ? 0 : slideIndex * SIZE}px)';
+      }
+      ['carouselOuter','carouselCanvas','postOuter','postCanvas'].forEach(function(id) {
+        var el = document.getElementById(id);
+        if (el) {
+          el.style.transform = 'none';
+          el.style.width     = '${SIZE}px';
+          el.style.height    = '${SIZE}px';
         }
-        ` : ''}
-      }
+      });
+    });
+  })();
+<\/script>`
 
-      if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', run);
-      } else {
-        run();
-      }
-    })();
-  <\/script>`
+  if (html.includes('</head>')) {
+    html = html.replace('</head>', injection + '</head>')
+  } else {
+    html = injection + html
+  }
 
-  return originalHtml.replace('</body>', script + '</body>')
+  return html
 }
 
-// ── Call Browserless to screenshot HTML ──────────────────
 async function screenshotWithBrowserless(html: string): Promise<Buffer> {
   const token = process.env.BROWSERLESS_TOKEN
-  if (!token) throw new Error('BROWSERLESS_TOKEN env variable not set. See setup guide.')
+  if (!token) throw new Error('BROWSERLESS_TOKEN not set in environment variables.')
 
-  const endpoint = `https://chrome.browserless.io/screenshot?token=${token}`
-
-  const res = await fetch(endpoint, {
-    method: 'POST',
+  const res = await fetch(`https://chrome.browserless.io/screenshot?token=${token}`, {
+    method:  'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       html,
       options: {
         type: 'png',
-        clip: { x: 0, y: 0, width: 1080, height: 1080 },
+        clip: { x: 0, y: 0, width: SIZE, height: SIZE },
         omitBackground: false,
       },
-      viewport: { width: 1080, height: 1080, deviceScaleFactor: 1 },
-      gotoOptions: { waitUntil: 'networkidle2', timeout: 20000 },
+      viewport: {
+        width:             SIZE,
+        height:            SIZE,
+        deviceScaleFactor: 1,   // CRITICAL: must be 1, not 2
+      },
+      gotoOptions: {
+        waitUntil: 'networkidle0',
+        timeout:   30000,
+      }
     }),
   })
 
   if (!res.ok) {
-    const errText = await res.text()
-    throw new Error(`Browserless error ${res.status}: ${errText.slice(0, 300)}`)
+    const txt = await res.text()
+    throw new Error(`Browserless ${res.status}: ${txt.slice(0, 400)}`)
   }
 
-  const arrayBuffer = await res.arrayBuffer()
-  return Buffer.from(arrayBuffer)
+  return Buffer.from(await res.arrayBuffer())
 }
 
-// ═══════════════════════════════════════════════════════════
-//  POST handler
-// ═══════════════════════════════════════════════════════════
 export async function POST(req: NextRequest) {
   try {
     const formData = await req.formData()
-    const file = formData.get('htmlFile') as File
+    const file = formData.get('htmlFile') as File | null
     if (!file) return NextResponse.json({ error: 'No file uploaded' }, { status: 400 })
 
     const originalHtml = await file.text()
@@ -103,38 +158,31 @@ export async function POST(req: NextRequest) {
     const total        = carousel ? countSlides(originalHtml) : 1
 
     if (carousel) {
-      // ── Build ZIP with all slides ──
       const zip = new JSZip()
-
       for (let i = 0; i < total; i++) {
-        const slideHtml = buildSlideHtml(originalHtml, i)
-        const pngBuf    = await screenshotWithBrowserless(slideHtml)
-        zip.file(`slide_${String(i + 1).padStart(2, '0')}.png`, pngBuf)
+        const prepared = prepareHtml(originalHtml, i)
+        const png      = await screenshotWithBrowserless(prepared)
+        zip.file(`slide_${String(i + 1).padStart(2, '0')}.png`, png)
       }
-
       const zipBuf = await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' })
-
       return new NextResponse(zipBuf as any, {
         headers: {
-          'Content-Type': 'application/zip',
+          'Content-Type':        'application/zip',
           'Content-Disposition': `attachment; filename="${baseName}_slides.zip"`,
         },
       })
     } else {
-      // ── Single PNG ──
-      const slideHtml = buildSlideHtml(originalHtml, null)
-      const pngBuf    = await screenshotWithBrowserless(slideHtml)
-      const pngUint8  = new Uint8Array(pngBuf)
-
-      return new NextResponse(pngUint8 as any, {
+      const prepared = prepareHtml(originalHtml, null)
+      const png      = await screenshotWithBrowserless(prepared)
+      return new NextResponse(new Uint8Array(png) as any, {
         headers: {
-          'Content-Type': 'image/png',
+          'Content-Type':        'image/png',
           'Content-Disposition': `attachment; filename="${baseName}.png"`,
         },
       })
     }
   } catch (err: any) {
-    console.error('Convert error:', err)
+    console.error('[convert] error:', err)
     return NextResponse.json({ error: err.message }, { status: 500 })
   }
 }
